@@ -85,7 +85,11 @@ func serveHash(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pass := r.PostFormValue("password")
+	if err := r.ParseForm(); err != nil {
+		log.Printf("ParseForm() err: %v", err)
+		return
+	}
+	pass := r.FormValue("password")
 	if pass == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("Missing 'password' field"))
