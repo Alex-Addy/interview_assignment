@@ -1,17 +1,81 @@
 package main
 
 import (
+	"context"
 	"crypto/sha512"
 	"encoding/base64"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"sync"
 	"time"
 )
 
 func main() {
-	http.HandleFunc("/hash", serveHash)
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt)
 
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	srv := NewServer()
+
+	go func() {
+		if err := srv.s.ListenAndServe(); err != nil {
+			if err != http.ErrServerClosed {
+				log.Fatal(err)
+			}
+		}
+	}()
+
+	<-stop
+
+	srv.Shutdown()
+}
+
+type Server struct {
+	s *http.Server
+
+	// once is used to protect the shutdown code
+	once sync.Once
+}
+
+// NewServer constructs and returns a Server instance.
+func NewServer() *Server {
+	mux := http.NewServeMux()
+
+	s := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+
+	srv := &Server{
+		s:    s,
+		once: sync.Once{},
+	}
+
+	mux.HandleFunc("/hash", serveHash)
+	mux.HandleFunc("/stop", func(w http.ResponseWriter, r *http.Request) {
+		srv.serveStop(w, r)
+	})
+
+	return srv
+}
+
+// Shutdown starts the shutdown of the server waiting for existing connections
+// to close. Will force shutdown after 5 seconds.
+func (srv *Server) Shutdown() {
+	srv.once.Do(func() {
+		log.Println("Shutting down...")
+		ctx, _ := context.WithTimeout(context.Background(), time.Second*5)
+		err := srv.s.Shutdown(ctx)
+		if err != nil {
+			log.Printf("Unable to cleanly shutdown: %v\n", err.Error())
+		}
+		log.Println("Shutdown complete.")
+	})
+}
+
+func (srv *Server) serveStop(w http.ResponseWriter, r *http.Request) {
+	go srv.Shutdown()
 }
 
 func serveHash(w http.ResponseWriter, r *http.Request) {
